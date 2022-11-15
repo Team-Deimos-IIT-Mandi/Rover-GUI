@@ -7,7 +7,6 @@ function App() {
     <div className="App">
       <Header />
       <Body></Body>
-      Team Deimos
       <Footer />
     </div>
   );
