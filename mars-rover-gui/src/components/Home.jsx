@@ -1,18 +1,35 @@
 import React, { Component } from "react";
-import { Container } from "react-bootstrap"
-import {Button} from "react-bootstrap"
 import Connection from "./Connection";
+import Teleoperation from "./Teleoperation"
+import {Row, Col, Container, Button} from "react-bootstrap"
 
 class Home extends Component {
     state = {};
 
     render() {
         return ( 
-            <main>
-                <h1 className="text-center mt-3">Robot Control bridge</h1>
-                
-                <Connection />
-            </main>
+            <div>
+                <Container>
+                    <h1 className="text-center mt-3">Robot Control bridge</h1>
+                    
+                    <Row>
+                        <Col>
+                            <Connection />
+                        </Col>
+                    </Row>
+                    
+                    <Row>
+                        <Col>
+                            <Teleoperation />
+                        </Col>
+                        <Col>
+                            <h1>MAP</h1>
+                        </Col>
+                    </Row>
+                    
+                    
+                </Container>
+            </div>
          );
     }
 }

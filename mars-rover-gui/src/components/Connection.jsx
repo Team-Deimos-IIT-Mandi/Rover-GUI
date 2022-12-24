@@ -37,7 +37,7 @@ class Connection extends Component {
                     console.log("connection problem");
                 }
 
-            }, 3000);   // executed every 3000 miliseconds
+            }, Config.RECONNECTION_TIMER);   // executed every 3000 miliseconds
 
         });
 
