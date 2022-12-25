@@ -17,6 +17,7 @@ class Connection extends Component {
     // function to initialize connection with ros:
     init_connection()
     {
+        // this.setState({ros: new window.ROSLIB.Ros()})
         this.state.ros = new window.ROSLIB.Ros();
         console.log(this.state.ros)
 

@@ -10,9 +10,10 @@ class Header extends Component {
           <Container>
             <Navbar.Brand href="#home">Navbar</Navbar.Brand>
             <Nav className="me-auto">
-              <Nav.Link href="/">Home</Nav.Link>
-              <Nav.Link href="/about">About</Nav.Link>
-              <Nav.Link href="/check">Pricing</Nav.Link>
+              <Nav.Link href="/">Robot Control</Nav.Link>
+              <Nav.Link href="https://rover.iitmandi.co.in/">About</Nav.Link>
+              <Nav.Link href="/lifescience">Life Science</Nav.Link>
+              <Nav.Link href="/roboarm">Robotic Arm</Nav.Link>
             </Nav>
           </Container>
         </Navbar>

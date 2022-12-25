@@ -18,6 +18,7 @@ class Teleoperation extends Component {
     // function to initialize connection with ros:
     init_connection()
     {
+        // this.setState({ros: new window.ROSLIB.Ros()})
         this.state.ros = new window.ROSLIB.Ros();
         console.log(this.state.ros)
 
@@ -56,7 +57,7 @@ class Teleoperation extends Component {
         var cmd_vel = new window.ROSLIB.Topic({
             ros: this.state.ros, // roshandler
             name: Config.CMD_VEL_TOPIC,
-            messageType: "geomtery_msgs/Twist"
+            messageType: "geometry_msgs/Twist"
 
         })
         // create twist message and send to rosbridge
@@ -108,7 +109,7 @@ class Teleoperation extends Component {
         return (
             <div>
                 <Joystick
-                    size={100}
+                    size={250}
                     baseColor="#EEEEEE"
                     stickColor="#BBBBBB"
                     move={this.handleMove}

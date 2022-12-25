@@ -1,10 +1,15 @@
 import React, { Component } from "react";
 import Connection from "./Connection";
 import Teleoperation from "./Teleoperation"
-import {Row, Col, Container, Button} from "react-bootstrap"
+import RobotState from "./RobotState";
+
+import Maps from "./MapBox"
+
+// import Maps from "./Maps";
+import {Row, Col, Container} from "react-bootstrap"
 
 class Home extends Component {
-    state = {};
+    state = {}
 
     render() {
         return ( 
@@ -18,14 +23,29 @@ class Home extends Component {
                         </Col>
                     </Row>
                     
-                    <Row>
-                        <Col>
-                            <Teleoperation />
+                    <Row  className="mt-5 justify-content-center">
+                        <Col xs={6} md={4}>
+                            <h2>JoyStick</h2>
+                            <Teleoperation className= "mt-3"/>
                         </Col>
-                        <Col>
-                            <h1>MAP</h1>
+                        <Col xs={12} md={8} >
+                            <h2>MAP</h2>
+                            {/* <MapContainer /> */}
+                            <span>
+                            <Maps />
+                            </span>
                         </Col>
                     </Row>
+
+                    <Row className="mt-5">
+                        <Col>
+                            <h2>Robot State</h2>
+                            <RobotState />
+                        </Col>
+                    </Row>
+
+
+                    {/* <Maps /> */}
                     
                     
                 </Container>
