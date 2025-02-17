@@ -68,7 +68,7 @@ def launch_smach_state_machine():
     try:
         launch_file_path = os.path.join(
             os.environ["HOME"],
-            "marz/src/Mars-Rover/smach_rover/launch/smach_rover.launch"
+            "catkin_ws/src/Mars-Rover/smach_rover/smach_rover/launch/smach.launch"
         )
         rospy.loginfo(f"Launching SMACH state machine from: {launch_file_path}")
         subprocess.Popen(["roslaunch", launch_file_path])
