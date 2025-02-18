@@ -43,56 +43,29 @@ const wss = new WebSocket.Server({ port: 8080 });
 
 console.log("Signaling server is running on ws://localhost:8080");
 
-const clients = new Map();
-
+// When a client connects to the WebSocket server
 wss.on('connection', (ws) => {
     console.log("Client connected");
 
+    // Handle incoming messages from the rover and relay them to all connected clients
     ws.on('message', (message) => {
-        try {
-            const parsedMessage = JSON.parse(message);
+        console.log("Received message from a client");
 
-            if (parsedMessage.type === 'register') {
-                clients.set(ws, parsedMessage.role);
-                console.log(`Client registered as: ${parsedMessage.role}`);
-                return;
+        // Broadcast the received message to all other connected clients
+        wss.clients.forEach(client => {
+            if (client !== ws && client.readyState === WebSocket.OPEN) {
+                client.send(message);
             }
-
-            console.log(`Received message: ${message}`);
-
-            if (parsedMessage.type === 'command') {
-                wss.clients.forEach(client => {
-                    if (clients.get(client) === 'robot' && client.readyState === WebSocket.OPEN) {
-                        client.send(message);
-                    }
-                });
-            } else if (parsedMessage.type === 'state_update') {
-                wss.clients.forEach(client => {
-                    if (clients.get(client) === 'gui' && client.readyState === WebSocket.OPEN) {
-                        client.send(message);
-                    }
-                });
-            } else if (parsedMessage.type === 'video_stream') {
-                wss.clients.forEach(client => {
-                    if (client !== ws && client.readyState === WebSocket.OPEN) {
-                        client.send(message);
-                    }
-                });
-            } else {
-                console.warn(`Unknown message type: ${parsedMessage.type}`);
-            }
-        } catch (error) {
-            console.error(`Error processing message: ${error.message}`);
-        }
+        });
     });
 
+    // Handle client disconnections
     ws.on('close', () => {
         console.log("Client disconnected");
-        clients.delete(ws);
     });
 
+    // Handle errors
     ws.on('error', (error) => {
         console.error("WebSocket error:", error);
     });
 });
-
