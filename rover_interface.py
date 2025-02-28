@@ -16,16 +16,15 @@ from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Twist, PoseStamped
 from cv_bridge import CvBridge, CvBridgeError
 
-# For auto-refreshing the Streamlit app (install via: pip install streamlit-autorefresh)
-from streamlit_autorefresh import st_autorefresh
-
-# Auto-refresh every 100ms (adjust as needed, remove or increase limit if necessary)
-st_autorefresh(interval=100, limit=10000, key="ros_autorefresh")
+# Initialize ROS node once
+if not rospy.core.is_initialized():
+    rospy.init_node('streamlit_ros_bridge', anonymous=True, disable_signals=True)
 
 # --- Persistent ROS Data using st.experimental_singleton ---
 @st.cache_resource
 def get_ros_data():
     return {
+        # Initialize with a blank image
         "camera_feed": np.zeros((480, 640, 3), dtype=np.uint8),
         "odometry": {'x': 0.0, 'y': 0.0, 'theta': 0.0},
         "waypoints": []
@@ -40,14 +39,13 @@ ros_data_lock = get_ros_data_lock()
 
 # Initialize ROS-related globals
 bridge = CvBridge()
-cmd_vel_pub = None  # Will be assigned later
+cmd_vel_pub = rospy.Publisher("/cmd_vel", Twist, queue_size=10)  # Initialize publisher here
 
 # --- ROS Callback Functions ---
 def image_callback(msg):
     """Convert incoming ROS image messages to an OpenCV image and update persistent data."""
     try:
         cv_image = bridge.imgmsg_to_cv2(msg, desired_encoding="passthrough")
-        # Check encoding: if it is rgb8 then convert; if already bgr8, skip conversion.
         if msg.encoding.lower() == "rgb8":
             cv_image = cv2.cvtColor(cv_image, cv2.COLOR_RGB2BGR)
         with ros_data_lock:
@@ -75,20 +73,12 @@ def waypoints_callback(msg):
 
 # --- ROS Listener in a Background Thread ---
 def ros_listener():
-    global cmd_vel_pub
-    # Create a publisher for teleoperation commands
-    cmd_vel_pub = rospy.Publisher("/cmd_vel", Twist, queue_size=10)
-    # Subscribe to the necessary topics
     rospy.Subscriber("/camera/color/image_raw", Image, image_callback)
     rospy.Subscriber("/odometry/filtered/global", Odometry, odom_callback)
     rospy.Subscriber("/move_base_simple/goal", PoseStamped, waypoints_callback)
     rospy.spin()
 
-# --- Initialize ROS Node in Main Thread ---
-if not rospy.core.is_initialized():
-    rospy.init_node('streamlit_ros_bridge', anonymous=True, disable_signals=True)
-
-# Start the ROS listener thread only once (using session state to check)
+# Start the ROS listener thread only once
 if "ros_thread_started" not in st.session_state:
     ros_thread = threading.Thread(target=ros_listener, daemon=True)
     ros_thread.start()
@@ -97,26 +87,26 @@ if "ros_thread_started" not in st.session_state:
 # --- Teleoperation Helper ---
 def send_cmd_vel(linear, angular):
     """Publish a Twist command to the /cmd_vel topic."""
-    global cmd_vel_pub
-    if cmd_vel_pub is not None:
+    try:
         twist = Twist()
         twist.linear.x = linear
         twist.angular.z = angular
         cmd_vel_pub.publish(twist)
-    else:
-        st.warning("Command publisher not ready yet.")
-
-# --- Optional: Simulated ArUco Detection ---
-def detect_aruco_markers(image):
-    """
-    Stub function for ArUco detection.
-    Replace this with your actual detection code if available.
-    """
-    return [{'id': 42, 'position': (300, 200)}]
+    except Exception as e:
+        st.warning(f"Error publishing command: {str(e)}")
 
 # --- Main Thread: Update st.session_state from persistent ROS data ---
 with ros_data_lock:
-    st.session_state["camera_feed"] = ros_data["camera_feed"].copy()
+    # Always copy the camera feed, even if it's the initial blank image
+    frame = ros_data["camera_feed"].copy()
+    
+    # Convert OpenCV image to bytes only if it's not empty
+    if frame is not None and frame.size > 0:
+        _, buffer = cv2.imencode('.jpg', frame)
+        st.session_state["camera_feed"] = buffer.tobytes()
+    else:
+        st.session_state["camera_feed"] = None
+    
     st.session_state["odometry"] = ros_data["odometry"].copy()
     st.session_state["waypoints"] = list(ros_data["waypoints"])
 
@@ -127,13 +117,19 @@ st.title("Mars Rover Control Interface")
 col1, col2 = st.columns([3, 2])
 with col1:
     st.header("Camera Feed")
-    frame = st.session_state["camera_feed"].copy()
-    if st.sidebar.checkbox("Enable ArUco Detection", value=False):
-        markers = detect_aruco_markers(frame)
-        for marker in markers:
-            cv2.drawMarker(frame, marker['position'], (0, 255, 0),
-                           cv2.MARKER_CROSS, 20, 2)
-    st.image(frame, channels="BGR")
+    frame_bytes = st.session_state["camera_feed"]
+    
+    if frame_bytes:
+        # Add a placeholder with spinner while loading
+        with st.spinner("Loading camera feed..."):
+            st.image(frame_bytes, channels="BGR", use_container_width=True)
+    else:
+        # Show a black placeholder if no feed available
+        st.image(np.zeros((480, 640, 3)), channels="BGR", 
+                caption="Waiting for camera feed...",
+                use_container_width=True)
+
+
 
 with col2:
     st.header("Vital Information")
@@ -155,16 +151,16 @@ speed = st.sidebar.slider("Speed", 0.0, 1.0, 0.5)
 
 col_left, col_center, col_right = st.sidebar.columns(3)
 with col_center:
-    if st.sidebar.button("↑ Forward"):
+    if st.button("↑ Forward"):
         send_cmd_vel(0.5 * speed, 0.0)
 with col_left:
-    if st.sidebar.button("← Left"):
-        send_cmd_vel(0.0, 0.5)
+    if st.button("← Left"):
+        send_cmd_vel(0.0, 0.5 * speed)
 with col_right:
-    if st.sidebar.button("→ Right"):
-        send_cmd_vel(0.0, -0.5)
+    if st.button("→ Right"):
+        send_cmd_vel(0.0, -0.5 * speed)
 with col_center:
-    if st.sidebar.button("↓ Back"):
+    if st.button("↓ Back"):
         send_cmd_vel(-0.5 * speed, 0.0)
 
 # Autonomous Waypoints Display
@@ -175,11 +171,3 @@ if st.session_state["waypoints"]:
         st.sidebar.write(f"{wp[0]:.2f}, {wp[1]:.2f}")
 else:
     st.sidebar.write("No waypoints received.")
-
-# Autonomous Patterns
-st.sidebar.subheader("Autonomous Patterns")
-if st.sidebar.button("Start Spiral Search"):
-    st.sidebar.write("Initiating spiral search pattern...")
-
-# Note:
-# Run this application with: streamlit run <this_script.py>
