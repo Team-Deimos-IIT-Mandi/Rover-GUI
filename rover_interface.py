@@ -19,38 +19,46 @@ from cv_bridge import CvBridge, CvBridgeError
 # For auto-refreshing the Streamlit app (install via: pip install streamlit-autorefresh)
 from streamlit_autorefresh import st_autorefresh
 
-# Auto-refresh every 100ms (adjust as needed)
-st_autorefresh(interval=100, limit=1000, key="ros_autorefresh")
+# Auto-refresh every 100ms (adjust as needed, remove or increase limit if necessary)
+st_autorefresh(interval=100, limit=10000, key="ros_autorefresh")
 
-# Global container for ROS data with a lock for thread safety
-ros_data = {
-    "camera_feed": np.zeros((400, 600, 3), dtype=np.uint8),
-    "odometry": {'x': 0.0, 'y': 0.0, 'theta': 0.0},
-    "waypoints": []
-}
-ros_data_lock = threading.Lock()
+# --- Persistent ROS Data using st.experimental_singleton ---
+@st.cache_resource
+def get_ros_data():
+    return {
+        "camera_feed": np.zeros((480, 640, 3), dtype=np.uint8),
+        "odometry": {'x': 0.0, 'y': 0.0, 'theta': 0.0},
+        "waypoints": []
+    }
+
+@st.cache_resource
+def get_ros_data_lock():
+    return threading.Lock()
+
+ros_data = get_ros_data()
+ros_data_lock = get_ros_data_lock()
 
 # Initialize ROS-related globals
 bridge = CvBridge()
-cmd_vel_pub = None  # To be set later
+cmd_vel_pub = None  # Will be assigned later
 
 # --- ROS Callback Functions ---
 def image_callback(msg):
-    """Convert incoming ROS image messages to an OpenCV image and store it globally."""
-    global ros_data
+    """Convert incoming ROS image messages to an OpenCV image and update persistent data."""
     try:
-        cv_image = bridge.imgmsg_to_cv2(msg, "bgr8")
+        cv_image = bridge.imgmsg_to_cv2(msg, desired_encoding="passthrough")
+        # Check encoding: if it is rgb8 then convert; if already bgr8, skip conversion.
+        if msg.encoding.lower() == "rgb8":
+            cv_image = cv2.cvtColor(cv_image, cv2.COLOR_RGB2BGR)
         with ros_data_lock:
             ros_data["camera_feed"] = cv_image
     except CvBridgeError as e:
         print("CvBridge Error:", e)
 
 def odom_callback(msg):
-    """Extract odometry data from ROS messages and store it globally."""
-    global ros_data
+    """Extract odometry data from ROS messages and update persistent data."""
     x = msg.pose.pose.position.x
     y = msg.pose.pose.position.y
-    # Compute yaw from quaternion
     q = msg.pose.pose.orientation
     siny_cosp = 2 * (q.w * q.z + q.x * q.y)
     cosy_cosp = 1 - 2 * (q.y * q.y + q.z * q.z)
@@ -59,8 +67,7 @@ def odom_callback(msg):
         ros_data["odometry"] = {'x': x, 'y': y, 'theta': theta}
 
 def waypoints_callback(msg):
-    """Receive waypoints (assumed as PoseStamped messages) and store them globally."""
-    global ros_data
+    """Receive waypoints (assumed as PoseStamped messages) and update persistent data."""
     x = msg.pose.position.x
     y = msg.pose.position.y
     with ros_data_lock:
@@ -69,7 +76,7 @@ def waypoints_callback(msg):
 # --- ROS Listener in a Background Thread ---
 def ros_listener():
     global cmd_vel_pub
-    # Publisher for teleoperation commands
+    # Create a publisher for teleoperation commands
     cmd_vel_pub = rospy.Publisher("/cmd_vel", Twist, queue_size=10)
     # Subscribe to the necessary topics
     rospy.Subscriber("/camera/color/image_raw", Image, image_callback)
@@ -79,10 +86,9 @@ def ros_listener():
 
 # --- Initialize ROS Node in Main Thread ---
 if not rospy.core.is_initialized():
-    # Use disable_signals to avoid conflicts with Streamlit's event loop.
     rospy.init_node('streamlit_ros_bridge', anonymous=True, disable_signals=True)
 
-# Start the ROS listener thread only once
+# Start the ROS listener thread only once (using session state to check)
 if "ros_thread_started" not in st.session_state:
     ros_thread = threading.Thread(target=ros_listener, daemon=True)
     ros_thread.start()
@@ -106,24 +112,22 @@ def detect_aruco_markers(image):
     Stub function for ArUco detection.
     Replace this with your actual detection code if available.
     """
-    # For demonstration, return a single marker at a fixed position.
     return [{'id': 42, 'position': (300, 200)}]
 
-# --- Main Thread: Update session_state from global ROS data ---
+# --- Main Thread: Update st.session_state from persistent ROS data ---
 with ros_data_lock:
-    st.session_state.camera_feed = ros_data["camera_feed"].copy()
-    st.session_state.odometry = ros_data["odometry"].copy()
-    st.session_state.waypoints = ros_data["waypoints"][:]
+    st.session_state["camera_feed"] = ros_data["camera_feed"].copy()
+    st.session_state["odometry"] = ros_data["odometry"].copy()
+    st.session_state["waypoints"] = list(ros_data["waypoints"])
 
 # --- GUI Layout ---
 st.title("Mars Rover Control Interface")
 
 # Camera Feed and Vital Information
 col1, col2 = st.columns([3, 2])
-
 with col1:
     st.header("Camera Feed")
-    frame = st.session_state.camera_feed.copy()
+    frame = st.session_state["camera_feed"].copy()
     if st.sidebar.checkbox("Enable ArUco Detection", value=False):
         markers = detect_aruco_markers(frame)
         for marker in markers:
@@ -134,7 +138,7 @@ with col1:
 with col2:
     st.header("Vital Information")
     st.subheader("Odometry")
-    odom = st.session_state.odometry
+    odom = st.session_state["odometry"]
     st.metric("X Position", f"{odom['x']:.2f} m")
     st.metric("Y Position", f"{odom['y']:.2f} m")
     st.metric("Heading", f"{odom['theta']:.2f} rad")
@@ -146,8 +150,6 @@ with col2:
 
 # Sidebar for Controls
 st.sidebar.header("Control Panel")
-
-# --- Teleoperation Controls ---
 st.sidebar.subheader("Manual Control")
 speed = st.sidebar.slider("Speed", 0.0, 1.0, 0.5)
 
@@ -165,20 +167,19 @@ with col_center:
     if st.sidebar.button("↓ Back"):
         send_cmd_vel(-0.5 * speed, 0.0)
 
-# --- Autonomous Waypoints Display (from ROS) ---
+# Autonomous Waypoints Display
 st.sidebar.subheader("Autonomous Navigation")
 st.sidebar.write("Received Waypoints:")
-if st.session_state.waypoints:
-    for wp in st.session_state.waypoints:
+if st.session_state["waypoints"]:
+    for wp in st.session_state["waypoints"]:
         st.sidebar.write(f"{wp[0]:.2f}, {wp[1]:.2f}")
 else:
     st.sidebar.write("No waypoints received.")
 
-# --- Autonomous Patterns ---
+# Autonomous Patterns
 st.sidebar.subheader("Autonomous Patterns")
 if st.sidebar.button("Start Spiral Search"):
     st.sidebar.write("Initiating spiral search pattern...")
 
 # Note:
-# To run this application, execute:
-#   streamlit run <this_script.py>
+# Run this application with: streamlit run <this_script.py>
