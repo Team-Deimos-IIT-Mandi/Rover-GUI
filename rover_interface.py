@@ -5,6 +5,7 @@ import threading
 import time
 import math
 import warnings
+from streamlit_autorefresh import st_autorefresh
 
 # Suppress ScriptRunContext warnings from background threads
 warnings.filterwarnings("ignore", message=".*missing ScriptRunContext.*")
@@ -16,6 +17,9 @@ from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Twist, PoseStamped
 from cv_bridge import CvBridge, CvBridgeError
 
+# Auto-refresh every 100ms for real-time updates
+st_autorefresh(interval=100, key="auto_refresh")
+
 # Initialize ROS node once
 if not rospy.core.is_initialized():
     rospy.init_node('streamlit_ros_bridge', anonymous=True, disable_signals=True)
@@ -24,7 +28,6 @@ if not rospy.core.is_initialized():
 @st.cache_resource
 def get_ros_data():
     return {
-        # Initialize with a blank image
         "camera_feed": np.zeros((480, 640, 3), dtype=np.uint8),
         "odometry": {'x': 0.0, 'y': 0.0, 'theta': 0.0},
         "waypoints": []
@@ -39,11 +42,10 @@ ros_data_lock = get_ros_data_lock()
 
 # Initialize ROS-related globals
 bridge = CvBridge()
-cmd_vel_pub = rospy.Publisher("/cmd_vel", Twist, queue_size=10)  # Initialize publisher here
+cmd_vel_pub = rospy.Publisher("/cmd_vel", Twist, queue_size=10)
 
 # --- ROS Callback Functions ---
 def image_callback(msg):
-    """Convert incoming ROS image messages to an OpenCV image and update persistent data."""
     try:
         cv_image = bridge.imgmsg_to_cv2(msg, desired_encoding="passthrough")
         if msg.encoding.lower() == "rgb8":
@@ -54,7 +56,6 @@ def image_callback(msg):
         print("CvBridge Error:", e)
 
 def odom_callback(msg):
-    """Extract odometry data from ROS messages and update persistent data."""
     x = msg.pose.pose.position.x
     y = msg.pose.pose.position.y
     q = msg.pose.pose.orientation
@@ -65,109 +66,102 @@ def odom_callback(msg):
         ros_data["odometry"] = {'x': x, 'y': y, 'theta': theta}
 
 def waypoints_callback(msg):
-    """Receive waypoints (assumed as PoseStamped messages) and update persistent data."""
     x = msg.pose.position.x
     y = msg.pose.position.y
     with ros_data_lock:
         ros_data["waypoints"].append((x, y))
 
-# --- ROS Listener in a Background Thread ---
-def ros_listener():
+# --- ROS Listener Thread ---
+if "ros_thread_started" not in st.session_state:
     rospy.Subscriber("/camera/color/image_raw", Image, image_callback)
     rospy.Subscriber("/odometry/filtered/global", Odometry, odom_callback)
     rospy.Subscriber("/move_base_simple/goal", PoseStamped, waypoints_callback)
-    rospy.spin()
-
-# Start the ROS listener thread only once
-if "ros_thread_started" not in st.session_state:
-    ros_thread = threading.Thread(target=ros_listener, daemon=True)
-    ros_thread.start()
     st.session_state["ros_thread_started"] = True
 
-# --- Teleoperation Helper ---
-def send_cmd_vel(linear, angular):
-    """Publish a Twist command to the /cmd_vel topic."""
+# --- Teleoperation State Management ---
+if 'movement' not in st.session_state:
+    st.session_state.movement = {'linear': 0.0, 'angular': 0.0}
+
+def set_movement(linear, angular):
+    st.session_state.movement['linear'] = linear
+    st.session_state.movement['angular'] = angular
+
+def send_continuous_cmd_vel():
+    twist = Twist()
+    twist.linear.x = st.session_state.movement['linear']
+    twist.angular.z = st.session_state.movement['angular']
     try:
-        twist = Twist()
-        twist.linear.x = linear
-        twist.angular.z = angular
         cmd_vel_pub.publish(twist)
     except Exception as e:
-        st.warning(f"Error publishing command: {str(e)}")
+        st.error(f"Command error: {str(e)}")
 
-# --- Main Thread: Update st.session_state from persistent ROS data ---
+# --- Main Update Loop ---
 with ros_data_lock:
-    # Always copy the camera feed, even if it's the initial blank image
     frame = ros_data["camera_feed"].copy()
-    
-    # Convert OpenCV image to bytes only if it's not empty
-    if frame is not None and frame.size > 0:
-        _, buffer = cv2.imencode('.jpg', frame)
-        st.session_state["camera_feed"] = buffer.tobytes()
-    else:
-        st.session_state["camera_feed"] = None
-    
-    st.session_state["odometry"] = ros_data["odometry"].copy()
-    st.session_state["waypoints"] = list(ros_data["waypoints"])
+    odom = ros_data["odometry"].copy()
+    waypoints = list(ros_data["waypoints"])
+
+# Update session state for odometry and waypoints (if needed elsewhere)
+st.session_state["odometry"] = odom
+st.session_state["waypoints"] = waypoints
+
+# Send continuous commands
+send_continuous_cmd_vel()
 
 # --- GUI Layout ---
 st.title("Mars Rover Control Interface")
 
-# Camera Feed and Vital Information
+# Create two columns: one for Camera Feed and one for Odometry/Status
 col1, col2 = st.columns([3, 2])
+
 with col1:
     st.header("Camera Feed")
-    frame_bytes = st.session_state["camera_feed"]
-    
-    if frame_bytes:
-        # Add a placeholder with spinner while loading
-        with st.spinner("Loading camera feed..."):
-            st.image(frame_bytes, channels="BGR", use_container_width=True)
+    # Use a placeholder to update the image directly
+    camera_placeholder = st.empty()
+    if frame.size > 0:
+        camera_placeholder.image(frame, channels="BGR", use_container_width=True)
     else:
-        # Show a black placeholder if no feed available
-        st.image(np.zeros((480, 640, 3)), channels="BGR", 
-                caption="Waiting for camera feed...",
-                use_container_width=True)
-
-
+        camera_placeholder.image(np.zeros((480, 640, 3), dtype=np.uint8), 
+                                 channels="BGR", 
+                                 caption="Waiting for camera feed...")
 
 with col2:
-    st.header("Vital Information")
-    st.subheader("Odometry")
-    odom = st.session_state["odometry"]
+    st.header("Odometry")
     st.metric("X Position", f"{odom['x']:.2f} m")
     st.metric("Y Position", f"{odom['y']:.2f} m")
     st.metric("Heading", f"{odom['theta']:.2f} rad")
     
-    st.subheader("System Status")
+    st.header("System Status")
     st.metric("Temperature", "42°C")
     st.metric("Battery", "78%")
-    st.metric("Speed", "0.5 m/s")
+    st.metric("Speed", f"{abs(st.session_state.movement['linear']):.1f} m/s")
 
-# Sidebar for Controls
-st.sidebar.header("Control Panel")
-st.sidebar.subheader("Manual Control")
-speed = st.sidebar.slider("Speed", 0.0, 1.0, 0.5)
+# --- Sidebar Layout ---
+st.sidebar.header("Controls")
+speed = st.sidebar.slider("Speed", 0.0, 1.0, 0.5, key="speed")
 
-col_left, col_center, col_right = st.sidebar.columns(3)
-with col_center:
-    if st.button("↑ Forward"):
-        send_cmd_vel(0.5 * speed, 0.0)
-with col_left:
-    if st.button("← Left"):
-        send_cmd_vel(0.0, 0.5 * speed)
-with col_right:
-    if st.button("→ Right"):
-        send_cmd_vel(0.0, -0.5 * speed)
-with col_center:
-    if st.button("↓ Back"):
-        send_cmd_vel(-0.5 * speed, 0.0)
+if st.sidebar.button("↑ Forward", key="forward"):
+    set_movement(0.5 * speed, 0.0)
+if st.sidebar.button("↓ Back", key="back"):
+    set_movement(-0.5 * speed, 0.0)
+if st.sidebar.button("← Left", key="left"):
+    set_movement(0.0, 0.5 * speed)
+if st.sidebar.button("→ Right", key="right"):
+    set_movement(0.0, -0.5 * speed)
+if st.sidebar.button("🛑 Stop", key="stop"):
+    set_movement(0.0, 0.0)
 
-# Autonomous Waypoints Display
-st.sidebar.subheader("Autonomous Navigation")
+# Checkbox for Aruco Detection
+st.sidebar.checkbox("Enable Aruco Detection", key="aruco_detection")
+
+st.sidebar.header("Navigation")
 st.sidebar.write("Received Waypoints:")
-if st.session_state["waypoints"]:
-    for wp in st.session_state["waypoints"]:
+if waypoints:
+    for wp in waypoints:
         st.sidebar.write(f"{wp[0]:.2f}, {wp[1]:.2f}")
 else:
     st.sidebar.write("No waypoints received.")
+
+# Optionally display Aruco detection status
+if st.session_state.get("aruco_detection", False):
+    st.sidebar.info("Aruco Detection is enabled!")
