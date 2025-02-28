@@ -72,9 +72,9 @@ def ros_listener():
     # Publisher for teleoperation commands
     cmd_vel_pub = rospy.Publisher("/cmd_vel", Twist, queue_size=10)
     # Subscribe to the necessary topics
-    rospy.Subscriber("/camera/image_raw", Image, image_callback)
-    rospy.Subscriber("/odom", Odometry, odom_callback)
-    rospy.Subscriber("/waypoints", PoseStamped, waypoints_callback)
+    rospy.Subscriber("/camera/color/image_raw", Image, image_callback)
+    rospy.Subscriber("/odometry/filtered/global", Odometry, odom_callback)
+    rospy.Subscriber("/move_base_simple/goal", PoseStamped, waypoints_callback)
     rospy.spin()
 
 # --- Initialize ROS Node in Main Thread ---
